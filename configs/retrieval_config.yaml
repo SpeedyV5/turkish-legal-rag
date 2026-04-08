@@ -1,0 +1,25 @@
+chunking:
+  strategy: hybrid_article_aware
+  min_chunk_chars: 300
+  max_chunk_chars: 1200
+  overlap_chars: 150
+
+embedding:
+  model_name: intfloat/multilingual-e5-base
+  query_prefix: "query: "
+  passage_prefix: "passage: "
+  batch_size: 16
+  normalize_embeddings: true
+
+retrieval:
+  top_k: 3
+
+input:
+  registry_path: data/processed/corpus/corpus_registry.csv
+  chunks_path: data/processed/corpus/corpus_chunks.jsonl
+
+output:
+  chunks_path: data/processed/corpus/corpus_chunks.jsonl
+  embeddings_path: data/processed/corpus/chunk_embeddings.npy
+  metadata_path: data/processed/corpus/chunk_metadata.jsonl
+  faiss_index_path: data/processed/corpus/faiss_index.bin

@@ -1,0 +1,9 @@
+# Data configuration
+datasets:
+  primary_hf_dataset:
+    source: huggingface
+    name: Renicames/turkish-law-chatbot
+    save_dir: data/raw/turkish_law_chatbot
+
+output:
+  reports_dir: outputs/runs/data_reports

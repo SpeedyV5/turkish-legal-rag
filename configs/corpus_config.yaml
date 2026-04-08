@@ -1,0 +1,17 @@
+sources:
+  mevzuat:
+    enabled: true
+    priority: 1
+    description: "Current legal texts and structured legislation sources"
+  tbmm:
+    enabled: true
+    priority: 2
+    description: "Legislative history, accepted texts, commission reports, PDFs"
+  yargitay:
+    enabled: true
+    priority: 3
+    description: "Court decisions and precedent-oriented legal texts"
+
+output:
+  registry_path: data/processed/corpus/corpus_registry.csv
+  sample_jsonl_path: data/processed/corpus/corpus_documents.jsonl

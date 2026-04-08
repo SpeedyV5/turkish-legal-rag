@@ -1,0 +1,17 @@
+pandas
+numpy
+datasets
+transformers
+sentence-transformers
+faiss-cpu
+scikit-learn
+pyyaml
+tqdm
+jupyter
+matplotlib
+requests
+pymupdf
+torch
+accelerate
+bitsandbytes
+sentencepiece

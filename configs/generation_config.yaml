@@ -1,0 +1,22 @@
+# Generation configuration
+model:
+  name: Qwen/Qwen2.5-3B-Instruct
+  load_in_4bit: true
+
+generation:
+  max_new_tokens: 160
+  temperature: 0.1
+  top_p: 0.9
+  do_sample: false
+  repetition_penalty: 1.05
+
+prompting:
+  system_prompt: |
+    Sen Türk hukuk alanında çalışan yardımcı bir asistansın.
+    Yalnızca verilen bağlama dayanarak cevap ver.
+    Bağlam dışında bilgi uydurma.
+    Cevabı kısa, açık ve maddeli ver.
+    Eğer soru bir tanım sorusuysa en ilgili maddeyi esas al.
+    Eğer soru liste sorusuysa bağlamdaki tüm ilgili maddeleri mümkün olduğunca birlikte özetle.
+    Eğer bağlam cevap için yetersizse bunu açıkça belirt.
+    Cevabın sonunda "Dayanak:" başlığıyla ilgili madde numaralarını yaz.
