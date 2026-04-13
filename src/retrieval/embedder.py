@@ -33,7 +33,12 @@ def save_jsonl(rows: list[dict[str, Any]], path: Path) -> None:
 
 
 def main() -> None:
-    cfg = load_yaml("configs/retrieval_config.yaml")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/retrieval_config.yaml")
+    args = parser.parse_args()
+
+    cfg = load_yaml(args.config)
 
     model_name = cfg["embedding"]["model_name"]
     passage_prefix = cfg["embedding"]["passage_prefix"]

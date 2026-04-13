@@ -17,7 +17,12 @@ def load_yaml(path: str) -> dict[str, Any]:
 
 
 def main() -> None:
-    cfg = load_yaml("configs/retrieval_config.yaml")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/retrieval_config.yaml")
+    args = parser.parse_args()
+
+    cfg = load_yaml(args.config)
 
     embeddings_path = Path(cfg["output"]["embeddings_path"])
     faiss_index_path = Path(cfg["output"]["faiss_index_path"])
