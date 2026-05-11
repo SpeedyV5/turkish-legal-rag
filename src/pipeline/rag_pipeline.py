@@ -6,11 +6,16 @@ from src.generation.generator import LocalGenerator
 from src.generation.prompt_builder import build_user_prompt
 
 
-def build_retriever(system: str = "e5large_reranked_ml"):
+def build_retriever(system: str = "e5large_reranked_bge"):
     """Build retriever based on system name. Models are forced to CPU to leave GPU for the LLM."""
     if system == "baseline":
-        from src.retrieval.retriever import LegalRetriever
-        return LegalRetriever()
+        # Clean dense baseline (e5-base, no keyword bonuses).
+        # The legacy LegalRetriever lives in src/retrieval/legacy/ and must NOT
+        # be used for evaluation or in this pipeline.
+        from src.retrieval.hybrid_retriever import DenseRetriever
+        retriever = DenseRetriever("configs/retrieval_config.yaml")
+        retriever.model = retriever.model.to("cpu")
+        return retriever
 
     if system == "e5large_reranked_ml":
         from src.retrieval.hybrid_retriever import DenseRetriever
@@ -20,6 +25,17 @@ def build_retriever(system: str = "e5large_reranked_ml"):
         return RerankedRetriever(
             base,
             reranker_model="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+            device="cpu",
+        )
+
+    if system == "e5large_reranked_bge":
+        from src.retrieval.hybrid_retriever import DenseRetriever
+        from src.retrieval.reranker import RerankedRetriever
+        base = DenseRetriever("configs/retrieval_config_e5large.yaml")
+        base.model = base.model.to("cpu")
+        return RerankedRetriever(
+            base,
+            reranker_model="BAAI/bge-reranker-v2-m3",
             device="cpu",
         )
 
@@ -44,7 +60,7 @@ def build_retriever(system: str = "e5large_reranked_ml"):
 
 
 class TurkishLegalRAGPipeline:
-    def __init__(self, system: str = "e5large_reranked_ml") -> None:
+    def __init__(self, system: str = "e5large_reranked_bge") -> None:
         print(f"[INFO] Retrieval system: {system}")
         self.retriever = build_retriever(system)
         print("[INFO] Loading LLM generator...")
@@ -65,8 +81,8 @@ class TurkishLegalRAGPipeline:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--system", default="e5large_reranked_ml",
-        choices=["baseline", "e5large_reranked_ml", "e5large_dense", "dense_reranked_ml"],
+        "--system", default="e5large_reranked_bge",
+        choices=["baseline", "e5large_reranked_ml", "e5large_reranked_bge", "e5large_dense", "dense_reranked_ml"],
     )
     parser.add_argument("--top-k", type=int, default=5)
     args = parser.parse_args()

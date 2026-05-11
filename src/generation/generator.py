@@ -16,7 +16,11 @@ def load_yaml(path: str) -> dict[str, Any]:
 
 
 class LocalGenerator:
-    def __init__(self, config_path: str = "configs/generation_config.yaml") -> None:
+    def __init__(
+        self,
+        config_path: str = "configs/generation_config.yaml",
+        lora_adapter_path: str | None = None,
+    ) -> None:
         self.cfg = load_yaml(config_path)
 
         self.model_name = self.cfg["model"]["name"]
@@ -46,17 +50,23 @@ class LocalGenerator:
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_compute_dtype=torch.bfloat16,
             )
             model_kwargs["quantization_config"] = quant_config
-            model_kwargs["dtype"] = torch.float16
+            model_kwargs["dtype"] = torch.bfloat16
         else:
-            model_kwargs["dtype"] = torch.float16
+            model_kwargs["dtype"] = torch.bfloat16
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             **model_kwargs,
         )
+
+        if lora_adapter_path:
+            from peft import PeftModel
+            print(f"[INFO] Loading LoRA adapter: {lora_adapter_path}")
+            self.model = PeftModel.from_pretrained(self.model, lora_adapter_path)
+            self.model.eval()
 
     def generate(self, user_prompt: str) -> str:
         messages = [

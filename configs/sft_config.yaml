@@ -1,0 +1,48 @@
+# QLoRA SFT configuration for Qwen2.5-3B-Instruct
+# Designed for 8 GB VRAM (RTX 3070 Laptop)
+
+model:
+  name: Qwen/Qwen2.5-3B-Instruct
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_compute_dtype: bfloat16
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  bias: none
+  task_type: CAUSAL_LM
+
+training:
+  output_dir: outputs/sft_qlora
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.06
+  lr_scheduler_type: cosine
+  max_seq_length: 1024
+  logging_steps: 5
+  save_steps: 50
+  save_total_limit: 2
+  fp16: false
+  bf16: true
+  gradient_checkpointing: true
+  optim: paged_adamw_8bit
+  dataloader_num_workers: 0
+  seed: 42
+
+data:
+  train_path: data/sft/sft_train.jsonl
+  format: chat  # "chat" or "sharegpt"

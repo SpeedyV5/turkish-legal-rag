@@ -10,9 +10,19 @@ import yaml
 
 from src.evaluation.metrics import (
     aggregate_metrics,
-    build_relevant_chunk_ids,
+    build_corpus_relevant_index,
+    build_relevant_chunk_ids_corpus_wide,
+    compute_article_level_metrics,
     compute_retrieval_metrics,
 )
+
+
+def load_corpus_metadata(metadata_path: str | Path) -> list[dict]:
+    rows = []
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        for line in f:
+            rows.append(json.loads(line))
+    return rows
 
 
 def load_yaml(path: str) -> dict[str, Any]:
@@ -87,6 +97,14 @@ def create_retriever(system_name: str, config_path: str = "configs/retrieval_con
             base, reranker_model="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
         )
 
+    elif system_name == "e5large_reranked_bge":
+        from src.retrieval.hybrid_retriever import DenseRetriever
+        from src.retrieval.reranker import RerankedRetriever
+        base = DenseRetriever(config_path)
+        return RerankedRetriever(
+            base, reranker_model="BAAI/bge-reranker-v2-m3",
+        )
+
     else:
         raise ValueError(f"Unknown system: {system_name}")
 
@@ -94,6 +112,7 @@ def create_retriever(system_name: str, config_path: str = "configs/retrieval_con
 def evaluate_retrieval(
     retriever,
     benchmark: list[dict],
+    corpus_index: dict[tuple[str, str], set[str]],
     k_values: list[int] | None = None,
     top_k_search: int = 10,
 ) -> dict[str, Any]:
@@ -103,6 +122,7 @@ def evaluate_retrieval(
     all_metrics: list[dict[str, float]] = []
     per_question_results: list[dict] = []
     error_cases: list[dict] = []
+    missing_gold_cases: list[dict] = []
 
     total = len(benchmark)
 
@@ -117,15 +137,30 @@ def evaluate_retrieval(
             error_cases.append({"id": qid, "error": str(e)})
             continue
 
-        relevant_ids = build_relevant_chunk_ids(
-            results,
+        relevant_ids = build_relevant_chunk_ids_corpus_wide(
+            corpus_index,
             q["relevant_doc_ids"],
             q["relevant_articles"],
         )
 
+        if not relevant_ids:
+            # Gold article not found in corpus - log so we can fix benchmark.
+            missing_gold_cases.append({
+                "id": qid,
+                "gold_doc_ids": q["relevant_doc_ids"],
+                "gold_articles": q["relevant_articles"],
+            })
+
         retrieved_ids = [r["chunk_id"] for r in results]
 
-        metrics = compute_retrieval_metrics(retrieved_ids, relevant_ids, k_values)
+        # Primary: article-level metrics (deduped by gold article)
+        metrics = compute_article_level_metrics(
+            results, q["relevant_doc_ids"], q["relevant_articles"], k_values,
+        )
+        # Secondary: chunk-level metrics (corpus-wide gold), kept for diagnostics
+        chunk_metrics = compute_retrieval_metrics(retrieved_ids, relevant_ids, k_values)
+        for key, val in chunk_metrics.items():
+            metrics[f"chunk_{key}"] = val
         all_metrics.append(metrics)
 
         retrieved_articles = [
@@ -179,9 +214,11 @@ def evaluate_retrieval(
         "breakdown": breakdown,
         "per_question_results": per_question_results,
         "error_cases": error_cases,
+        "missing_gold_cases": missing_gold_cases,
         "zero_recall_at_5": zero_recall_cases,
         "num_questions": total,
         "num_evaluated": len(all_metrics),
+        "gold_relevance_mode": "corpus_wide",
     }
 
 
@@ -195,12 +232,15 @@ def main() -> None:
             "baseline_dense", "bm25_only", "hybrid",
             "hybrid_reranked", "dense_reranked",
             "dense_reranked_ml", "hybrid_reranked_ml",
+            "e5large_reranked_bge",
             "e5large_dense", "e5large_reranked_ml",
         ],
     )
     parser.add_argument("--benchmark", type=str, default="data/benchmark/gold_benchmark.jsonl")
     parser.add_argument("--output-dir", type=str, default="outputs/evaluation")
     parser.add_argument("--config", type=str, default="configs/retrieval_config.yaml")
+    parser.add_argument("--metadata", type=str, default="data/processed/corpus/chunk_metadata.jsonl")
+    parser.add_argument("--tag", type=str, default="", help="Optional suffix for the output filename, e.g. 'test'.")
     args = parser.parse_args()
 
     print(f"[INFO] System: {args.system}")
@@ -210,12 +250,18 @@ def main() -> None:
     benchmark = load_benchmark(args.benchmark)
     print(f"[INFO] Loaded {len(benchmark)} questions")
 
+    print(f"[INFO] Loading corpus metadata: {args.metadata}")
+    corpus_metadata = load_corpus_metadata(args.metadata)
+    corpus_index = build_corpus_relevant_index(corpus_metadata)
+    print(f"[INFO] Corpus index built: {len(corpus_index)} (doc_id, article) keys, "
+          f"{sum(len(v) for v in corpus_index.values())} chunk mappings")
+
     print(f"[INFO] Initializing retriever: {args.system}...")
     retriever = create_retriever(args.system, config_path=args.config)
 
     print("[INFO] Running evaluation...")
     start = time.time()
-    results = evaluate_retrieval(retriever, benchmark)
+    results = evaluate_retrieval(retriever, benchmark, corpus_index)
     elapsed = time.time() - start
 
     results["system"] = args.system
@@ -223,7 +269,8 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"eval_{args.system}.json"
+    suffix = f"_{args.tag}" if args.tag else ""
+    output_path = output_dir / f"eval_{args.system}{suffix}.json"
 
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)

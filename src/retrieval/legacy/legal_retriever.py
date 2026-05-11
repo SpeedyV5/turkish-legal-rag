@@ -1,6 +1,17 @@
+"""DEPRECATED LEGACY RETRIEVER.
+
+This is the original Phase-1 retriever which contained hardcoded keyword
+bonuses for a handful of seed queries (kasten oldurme, bosanma,
+cumhuriyet, "Madde N"). Those bonuses biased its rankings and made it
+unsuitable as a "clean" baseline for ablation. We keep it here only for
+historical reference. Do NOT use in evaluation or in the pipeline.
+
+The clean replacement is `src.retrieval.hybrid_retriever.DenseRetriever`.
+"""
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +19,13 @@ import faiss
 import numpy as np
 import yaml
 from sentence_transformers import SentenceTransformer
+
+warnings.warn(
+    "src.retrieval.legacy.legal_retriever.LegalRetriever is deprecated. "
+    "Use src.retrieval.hybrid_retriever.DenseRetriever instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 def load_yaml(path: str) -> dict[str, Any]:

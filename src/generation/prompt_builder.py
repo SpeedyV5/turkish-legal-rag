@@ -34,25 +34,26 @@ def detect_question_type(question: str) -> str:
     return "general"
 
 
+INSUFFICIENT_CONTEXT_FALLBACK = "Bağlamda yeterli bilgi yoktur."
+
+
 def build_user_prompt(question: str, results: list[dict[str, Any]]) -> str:
     context = format_context(results)
     qtype = detect_question_type(question)
 
     if qtype == "list":
         task_instruction = (
-            "Bu bir listeleme sorusudur. "
-            "Bağlamdaki ilgili tüm maddeleri mümkün olduğunca birlikte kullan. "
-            "Eksik liste verme. "
-            "Cevabı madde madde yaz."
+            "Bu bir LİSTE sorusudur. Bağlamdaki ilgili TÜM maddeleri kullan, "
+            "cevabı numaralı madde madde yaz. Eksik liste verme."
         )
     elif qtype == "definition":
         task_instruction = (
-            "Bu bir tanım sorusudur. "
-            "En ilgili maddeyi merkeze alarak kısa ve net cevap ver."
+            "Bu bir TANIM sorusudur. En ilgili maddeyi merkeze alarak "
+            "1-3 cümlede kısa ve net cevap ver."
         )
     else:
         task_instruction = (
-            "Bağlamdaki en ilgili parçaları kullanarak kısa ve net cevap ver."
+            "Bağlamdaki en ilgili parçayı kullanarak kısa ve net cevap ver."
         )
 
     return f"""Aşağıda Türk hukuk metinlerinden getirilen bağlam parçaları verilmiştir.
@@ -67,5 +68,5 @@ Görev:
 - Soruyu yalnızca verilen bağlama dayanarak cevapla.
 - {task_instruction}
 - Bağlamda olmayan bilgi ekleme.
-- Cevabın sonunda 'Dayanak:' satırı aç ve kullandığın madde numaralarını yaz.
+- Cevabın sonunda yeni bir satıra geç ve "Dayanak:" yaz; ardından virgülle ayırarak kullandığın madde numaralarını "Madde N" formatında listele (parantez, açıklama veya başka kelime kullanma).
 """
