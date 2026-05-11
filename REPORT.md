@@ -202,35 +202,314 @@ Bu fazda yapılanlar:
 Faz 2'de planlanıp YAPILMAYANLAR (dürüst değerlendirme):
 ✗ Embedding domain adaptation / contrastive fine-tuning — 4GB VRAM ile fine-tuning yapılamadı; ancak alternatif olarak e5-large model denemesi yapıldı ve büyük iyileşme sağlandı
 ✗ Hard negative mining — Embedding fine-tuning'e bağımlı, mevcut VRAM ile uygulanamadı
-✗ QA evaluation (F1, EM metriklerinin generation çıktıları üzerinde koşturulması) — Qwen 3B modeli 4GB VRAM'de soru başına dakikalarca sürdüğünden 175 soruluk tam benchmark koşturulamadı. QA eval script'i (run_qa_eval.py) hazırlanmış ancak donanım kısıtı nedeniyle Faz 4'e bırakılmıştır. İbo'nun daha güçlü GPU'su veya API tabanlı inference ile koşturulabilir.
+✗ QA evaluation — Faz 3'e devredildi ve orada tamamlandı
 
-FAZ 3 (İbo — Bekliyor):
-Bu fazda İbo'dan beklenenler:
-- Çok dilli reranker'ın fine-tuning'i (mevcut mmarco modeli iyi ama Türkçe hukuk verisine özel fine-tune ile daha iyi olabilir)
-- Alternatif reranker denemesi (BAAI/bge-reranker-v2-m3 gibi daha büyük modeller)
-- Retrieval-aware prompting iyileştirmesi
-- LLM üzerinde LoRA/QLoRA fine-tuning denemesi
-- Tüm ablation varyantlarının koşturulması (en iyi retrieval sistemi: e5large_reranked_ml olarak belirlenmiştir)
-- Best system pipeline ve inference script
+Not: Faz 3 çalışmaları NVIDIA RTX 3070 Laptop GPU (8GB VRAM) üzerinde gerçekleştirilmiştir. Faz 2'deki 4GB VRAM (RTX 3050) kısıtı artık geçerli değildir.
 
-İbo'ya devredilen sonuçlar ve çıktılar:
-- data/benchmark/gold_benchmark.jsonl (175 soru)
-- src/evaluation/ altındaki tüm evaluation script'leri
-- outputs/evaluation/ altında 9 sistemin eval sonuçları (JSON)
-- configs/retrieval_config_e5large.yaml (e5-large konfigürasyonu)
-- data/processed/corpus/faiss_index_e5large.bin (e5-large FAISS indeksi)
-- En iyi sistem: e5large_reranked_ml (Recall@10=0.89, MRR=0.66, Hit@5=0.85)
-- İngilizce cross-encoder zararlı, çok dilli cross-encoder faydalı
-- E5-large > e5-base (tek başına bile tüm e5-base kombinasyonlarını geçiyor)
-- List sorularında en iyi: e5large_reranked_ml (Recall@5=0.77, baseline 0.59'dan +29%)
-- Hard sorularda en iyi: e5large_reranked_ml (Recall@5=0.74, baseline 0.54'ten +36%)
+---
 
-FAZ 4 (Deniz — Bekliyor):
-Bu fazda yapılması gerekenler:
-- QA metrikleri (EM, F1, BLEU, ROUGE, faithfulness, citation accuracy)
-- Halüsinasyon analizi
-- Soru tipi bazında başarısızlık sınıflandırması
-- Ablation tabloları ve grafikler
-- Error analysis (hangi sorularda, neden, hangi kanunlarda hata)
-- Raporun deney, sonuç ve error analysis kısımları
-- Sunum ve demo senaryosu
+8. Faz 3: Evaluation Bug Fix ve Benchmark Hazırlığı
+
+8.1 Evaluation Bug Fix: build_relevant_chunk_ids
+
+Faz 2'den devralınan evaluation kodunda kritik bir hata tespit edildi. Retrieval metrikleri hesaplanırken, gold relevant chunk ID'leri yalnızca soru bazında eşleştiriliyordu ve corpus-wide chunk→article eşlemesi yapılmıyordu. Bu durum özellikle birden fazla chunk'a sahip maddelerde recall'un yanlış hesaplanmasına yol açıyordu.
+
+Düzeltme: Corpus metadata dosyasından (chunk_metadata.jsonl) tüm chunk→article eşlemesi yüklenerek, her sorunun gold article'larına ait tüm chunk ID'leri corpus genelinde doğru şekilde belirlendi. Ayrıca article-level recall metriği eklendi.
+
+Sonuç: Bug fix sonrası 9 retrieval sistemi yeniden koşturuldu ve sonuçlar güncellendi. Düzeltme öncesi recall değerleri yanıltıcıydı; düzeltme sonrası sonuçlar güvenilir hale geldi.
+
+8.2 Benchmark Train/Dev/Test Split
+
+175 soruluk gold benchmark, stratified split ile üç parçaya ayrıldı:
+- Train: 112 soru (SFT verisi için)
+- Dev: 32 soru (prompt tuning ve hiperparametre seçimi için)
+- Test: 31 soru (final değerlendirme için)
+
+Stratifikasyon source_law, question_type ve difficulty alanlarına göre yapıldı.
+
+8.3 Liste Tipi Gold Expansion
+
+Liste tipi soruların gold relevant article alanları genişletildi. Best retriever (e5-large + multilingual reranker) ile her liste sorusu için ek aday maddeler üretildi, manuel inceleme sonrası uygun olanlar gold benchmark'a eklendi. Bu işlem suggest_list_gold_expansion.py ve apply_list_gold_expansion.py script'leri ile gerçekleştirildi.
+
+---
+
+9. Faz 3: QA Evaluation Methodology
+
+9.1 Metrikler
+
+QA evaluation pipeline'ı (src/evaluation/run_qa_eval.py) şu metrikleri hesaplar:
+
+- **Exact Match (EM)**: Cevabın gold cevapla tamamen eşleşip eşleşmediği (Türkçe normalizasyon sonrası)
+- **Token-level F1**: Cevap ve gold cevap arasındaki token düzeyinde precision, recall ve F1
+- **Citation F1 / Precision / Recall**: Modelin ürettiği "Dayanak:" satırındaki madde referanslarının gold article'larla eşleşmesi
+- **Citation Exact Match**: Dayanak'taki maddelerin gold ile tam eşleşme oranı
+- **Has Dayanak**: Cevabın sonunda "Dayanak:" satırı olup olmadığı
+- **Faithfulness (lexical proxy)**: Cevaptaki içerik tokenlarının retrieved context'te bulunma oranı
+
+9.2 Citation Parsing
+
+Model cevabının sonunda "Dayanak:" satırı aranır. Bu satırdan regex ile madde referansları (örn. "Madde 114", "md. 26/1") çıkarılır. Bu referanslar gold article listesiyle karşılaştırılarak citation precision, recall ve F1 hesaplanır.
+
+9.3 Faithfulness Ölçümü
+
+Faithfulness, rule-based lexical overlap ile ölçülmektedir. Cevaptaki anlamlı tokenlar (stop word'ler hariç) retrieved context'teki tokenlara karşı eşleştirilir. Bu metrik bir proxy'dir ve LLM-as-judge veya NLI tabanlı yöntemler kadar güçlü değildir, ancak halüsinasyon eğilimini yakalamak için yeterli bir sinyaldir.
+
+Faithfulness < 0.5 olan cevaplar "yüksek halüsinasyon riski" olarak sınıflandırılmıştır.
+
+BLEU ve ROUGE metrikleri eklenmemiştir. Hukuk metinlerinde cevap yapısı farklı olabildiğinden token-level F1 daha anlamlı bir karşılaştırma sağlamaktadır; ancak bu metrikler ileride eklenebilir.
+
+---
+
+10. Faz 3: Reranker Değişikliği
+
+Faz 2'de en iyi reranker olarak mmarco-mMiniLMv2-L12-H384-v1 (çok dilli, 33M parametre) belirlenmiştir. Faz 3'te BAAI/bge-reranker-v2-m3 (çok dilli, 568M parametre) zero-shot olarak entegre edilmiş ve A/B karşılaştırması yapılmıştır.
+
+bge-reranker-v2-m3 daha güncel ve güçlü bir modeldir. Pipeline varsayılanı olarak bge-reranker seçilmiştir. Reranker fine-tuning yapılmamıştır; zero-shot performans yeterli görülmüştür.
+
+İngilizce reranker'ın Türkçe metinlerde zararlı olduğu bulgusu Faz 2'de doğrulanmış ve Faz 3'te de korunmuştur. Pipeline'da yalnızca çok dilli reranker kullanılmaktadır.
+
+---
+
+11. Faz 3: Prompt Tuning
+
+Prompt builder (src/generation/prompt_builder.py) iteratif olarak iyileştirilmiştir. Temel değişiklikler:
+
+- Citation discipline güçlendirildi: Model, cevap sonunda "Dayanak:" satırı ile kaynak maddelerini belirtmeye zorlandı
+- Fallback cümlesi kaldırıldı: Önceki versiyonda context dışı sorularda üretilen gereksiz fallback cümlesi kaldırıldı
+- max_new_tokens 160'tan 384'e çıkarıldı (truncation azaltmak için)
+
+Dev set üzerinde 5 prompt versiyonu denendi. En iyi versiyon (v5) citation F1'de +0.24, faithfulness'ta +0.08 iyileşme sağladı (answer F1'de −0.07 marjinal düşüşle).
+
+---
+
+12. Faz 3: QLoRA SFT Fine-Tuning
+
+12.1 Amaç
+
+Qwen2.5-3B-Instruct modelini Türk hukuk soruları için ince ayar yaparak cevap kalitesi, citation doğruluğu ve faithfulness'ı artırmak.
+
+12.2 Eğitim Verisi
+
+Train split'teki 112 sorudan SFT verisi hazırlandı. Her örnek şu formatta:
+- System: Türkçe hukuk asistanı system prompt'u
+- User: Soru + retrieved context (gold article chunk'ları)
+- Assistant: Gold cevap + "Dayanak:" satırı
+
+Veri, corpus chunk metadata'sından article referans eşlemesi yapılarak üretildi. Madde referans normalizasyonu uygulandı (benchmark "Madde 114" vs corpus "MADDE 114-" formatı).
+
+12.3 Eğitim Konfigürasyonu
+
+| Parametre | Değer |
+|-----------|-------|
+| Base model | Qwen/Qwen2.5-3B-Instruct |
+| Quantization | 4-bit NF4, double quant |
+| Compute dtype | bfloat16 |
+| LoRA rank (r) | 16 |
+| LoRA alpha (α) | 32 |
+| LoRA dropout | 0.05 |
+| Target modules | q_proj, k_proj, v_proj, o_proj |
+| Epochs | 3 |
+| Batch size | 1 (effective 8 with grad accum) |
+| Learning rate | 2e-4 |
+| Scheduler | cosine |
+| Warmup ratio | 0.06 |
+| Max sequence length | 1024 |
+| Optimizer | paged_adamw_8bit |
+| Completion-only loss | Evet (yalnızca assistant tokenleri) |
+
+12.4 Eğitim Detayları
+
+- Donanım: NVIDIA RTX 3070 Laptop GPU, 8GB VRAM
+- Süre: ~22 dakika, 42 step
+- TRL 1.4 API (SFTConfig + SFTTrainer, peft_config doğrudan trainer'a verildi)
+- Windows ortamında PYTHONUTF8=1 ayarı gerekli
+- Adapter boyutu: ~60MB (outputs/sft_qlora/final/)
+
+---
+
+13. Faz 3: Ablation Zinciri ve Sonuçlar
+
+13.1 Ablation Zinciri
+
+Sistem kademeli olarak iyileştirilmiştir:
+
+Adım 1 — Baseline: e5-base dense retrieval, untuned Qwen2.5-3B-Instruct
+Adım 2 — Embedding model seçimi: e5-base → e5-large (MRR: 0.5896 → 0.6773, +14.9%)
+Adım 3 — Reranker ekleme: bge-reranker-v2-m3 zero-shot (MRR: 0.6773 → 0.6964, Recall@5: 0.7629 → 0.8048)
+Adım 4 — Prompt tuning: citation discipline, Dayanak formatı (dev set üzerinde iterasyon)
+Adım 5 — QLoRA SFT: 112 örnek, 3 epoch fine-tuning (answer_f1 +14.6%, faithfulness +15.9%)
+
+Not: Adım 2'de gerçek embedding fine-tuning (contrastive learning / hard negative mining) yapılmamıştır. Bunun yerine daha güçlü bir pretrained model (e5-large) seçilerek retrieval kalitesi iyileştirilmiştir. Bu karar dürüstçe "model selection" olarak konumlandırılmıştır.
+
+13.1.1 Formal Ablation Tablosu (Test Split, 31 soru)
+
+| Varyant | Retrieval | LLM | MRR | R@5 | Ans F1 | Cite F1 | Cite Exact | Faith | Latency |
+|---------|-----------|-----|-----|-----|--------|---------|------------|-------|---------|
+| 1. Baseline | e5-base dense | Qwen 3B untuned | 0.5896 | 0.7429 | 0.2453 | 0.3765 | 0.1290 | 0.7228 | ~15s |
+| 2. + Model selection | e5-large dense | Qwen 3B untuned | 0.6773 | 0.7629 | 0.3024 | 0.5233 | 0.1935 | 0.7615 | ~15s |
+| 3. + Reranker | e5-large + BGE | Qwen 3B untuned | 0.6964 | 0.8048 | 0.2567 | 0.4851 | 0.0968 | 0.7454 | ~17s |
+| 4. + QLoRA SFT | e5-large + BGE | Qwen 3B QLoRA | 0.6964 | 0.8048 | **0.4031** | **0.5742** | **0.4516** | **0.9041** | ~21s |
+
+Varyant 3'te answer F1'in varyant 2'ye göre düştüğü görülmektedir. Bunun nedeni reranker'ın daha doğru ama farklı chunk'lar getirmesidir — untuned LLM bu değişikliğe adapte olamamıştır. QLoRA SFT ile (varyant 4) tüm metriklerde dramatik iyileşme sağlanmıştır.
+
+Retrieval metrikleri (MRR, Recall@5) tüm 175 soru üzerinden hesaplanmıştır. QA metrikleri (Ans F1, Cite F1, vb.) test split 31 soru üzerinden hesaplanmıştır.
+
+13.2 Retrieval Sonuçları (Faz 2, 175 soru — tüm benchmark)
+
+| Sistem | MRR | Recall@5 | Recall@10 |
+|--------|-----|----------|-----------|
+| baseline_dense (e5-base) | 0.5896 | 0.7429 | 0.7933 |
+| bm25_only | 0.3208 | 0.4657 | 0.5667 |
+| hybrid (e5-base + BM25, RRF) | 0.5510 | 0.7171 | 0.8057 |
+| dense_reranked (İngilizce CE) | 0.4139 | 0.6229 | 0.7286 |
+| hybrid_reranked (İngilizce CE) | 0.4122 | 0.5943 | 0.7257 |
+| dense_reranked_ml (mMiniLMv2) | 0.6568 | 0.7524 | 0.8086 |
+| hybrid_reranked_ml (mMiniLMv2) | 0.6587 | 0.7533 | 0.8143 |
+| e5large_dense | 0.6773 | 0.7629 | 0.8476 |
+| e5large_reranked_ml (mMiniLMv2) | 0.6644 | 0.7952 | 0.8514 |
+| **e5large_reranked_bge (BGE-v2-m3)** | **0.6964** | **0.8048** | **0.8743** |
+
+Not: İlk 9 sistem Faz 2'de koşturulmuş olup comparison_report.json'dadır. BGE reranker Faz 3'te entegre edilmiş olup eval_e5large_reranked_bge.json'da ayrı tutulmaktadır. MRR değerleri: comparison_report'ta "mrr" olarak (top-5 MRR), BGE eval'da "chunk_mrr" olarak raporlanmıştır.
+
+Önemli bulgular:
+- İngilizce cross-encoder zararlı: MRR'ı 0.59'dan 0.41'e düşürdü
+- E5-large tek başına tüm e5-base kombinasyonlarını geçti
+- En yüksek Recall@5: **e5large_reranked_bge** (0.8048) — pipeline default
+- En yüksek MRR: **e5large_reranked_bge** (0.6964) — BGE reranker hem MRR hem Recall'da lider
+- BGE vs mMiniLMv2: MRR +0.032, Recall@5 +0.010, Recall@10 +0.023 — BGE her metrikte üstün
+
+13.3 QA Sonuçları — Dev Split (32 soru)
+
+Not: Dev split'te baseline, prompt iterasyonu sırasında e5large_reranked_ml retrieval sistemiyle koşturulmuştur (prompt_v5). SFT-QLoRA sonuçları ise e5large_reranked_bge ile koşturulmuştur. Bu nedenle dev split'teki iyileşmenin bir kısmı retrieval sistemi farkından kaynaklanabilir. Test split'te her iki sonuç da aynı retrieval sistemi (e5large_reranked_bge) kullanılmıştır ve karşılaştırma güvenilirdir.
+
+| Metrik | Baseline | SFT-QLoRA | Delta |
+|--------|----------|-----------|-------|
+| Answer F1 | 0.2440 | 0.3793 | +13.5% |
+| Answer Precision | 0.2099 | 0.3621 | +15.2% |
+| Answer Recall | 0.3376 | 0.4638 | +12.6% |
+| Citation F1 | 0.4278 | 0.5156 | +8.8% |
+| Citation Precision | 0.3411 | 0.5104 | +16.9% |
+| Citation Recall | 0.7031 | 0.5625 | −14.1% |
+| Citation Exact | 0.1562 | 0.3750 | +21.9% |
+| Has Dayanak | 0.8438 | 0.8438 | +0.0% |
+| Faithfulness | 0.7671 | 0.8491 | +8.2% |
+
+13.4 QA Sonuçları — Test Split (31 soru)
+
+| Metrik | Baseline | SFT-QLoRA | Delta |
+|--------|----------|-----------|-------|
+| Answer F1 | 0.2567 | 0.4031 | +14.6% |
+| Answer Precision | 0.2273 | 0.4051 | +17.8% |
+| Answer Recall | 0.3622 | 0.4598 | +9.8% |
+| Citation F1 | 0.4851 | 0.5742 | +8.9% |
+| Citation Precision | 0.3946 | 0.5806 | +18.6% |
+| Citation Recall | 0.8065 | 0.6237 | −18.3% |
+| Citation Exact | 0.0968 | 0.4516 | +35.5% |
+| Has Dayanak | 0.8387 | 0.9677 | +12.9% |
+| Faithfulness | 0.7454 | 0.9041 | +15.9% |
+
+13.5 Soru Tipi Bazlı Sonuçlar (SFT-QLoRA, Test)
+
+| Soru Tipi | Answer F1 | Citation F1 | Faithfulness |
+|-----------|-----------|-------------|-------------|
+| Definition | 47.6% | 74.4% | 92.4% |
+| Factual | 26.4% | 33.3% | 67.8% |
+| List | 39.8% | 54.7% | 97.1% |
+| Procedural | 33.8% | 33.3% | 97.6% |
+
+13.6 Kanun Bazlı Sonuçlar (SFT-QLoRA, Test)
+
+| Kanun | Answer F1 | Citation F1 | Faithfulness |
+|-------|-----------|-------------|-------------|
+| Ceza Muhakemesi Kanunu | 58.3% | 79.2% | 95.8% |
+| Türk Borçlar Kanunu | 56.0% | 93.3% | 92.3% |
+| Türk Medeni Kanunu | 47.0% | 65.0% | 95.2% |
+| Anayasa | 46.3% | 73.3% | 85.8% |
+| Türk Ceza Kanunu | 25.3% | 28.0% | 74.8% |
+| Hukuk Muhakemeleri Kanunu | 21.4% | 25.0% | 96.0% |
+| İdari Yargılama Usulü Kanunu | 5.7% | 0.0% | 100.0% |
+
+---
+
+14. Faz 3: Error Analysis
+
+14.1 Genel Durum
+
+SFT-QLoRA sonrası test setinde:
+- İyi cevaplar (F1 > 0.5): 13/31 (%42)
+- Düşük faithfulness (< 0.5): 2/31 (%6)
+- Eksik Dayanak: 1/31 (%3)
+
+Baseline ile karşılaştırma:
+- İyi cevaplar: 4/31 → 13/31 (%13 → %42)
+- Düşük faithfulness: 5/31 → 2/31 (%16 → %6)
+- Eksik Dayanak: 5/31 → 1/31 (%16 → %3)
+
+14.2 Düşük Faithfulness Vakaları
+
+tck_025 (faith=0.10, F1=0.05): Model, yağma suçunun cezası hakkında context dışı bilgi üretti. Bu vaka tipik bir halüsinasyon örneğidir — model eğitim verisinden ezberlenmiş bilgiyi context yerine kullandı.
+
+anayasa_003 (faith=0.40, F1=0.32): Model, Anayasa'nın yapısı hakkında kısmen doğru ama context'te bulunmayan detaylar ekledi.
+
+14.3 Kanun Bazlı Zayıflıklar
+
+Türk Ceza Kanunu (TCK): Answer F1 %25.3 — model özellikle ceza miktarı ve nitelikli hallerde düşük performans gösterdi. Faithfulness %74.8 ile diğer kanunlara göre belirgin şekilde düşük.
+
+Hukuk Muhakemeleri Kanunu (HMK): Answer F1 %21.4 — usul hukuku sorularında model yeterli detay veremedi.
+
+İdari Yargılama Usulü Kanunu (İYUK): Answer F1 %5.7, Citation F1 %0.0 — yalnızca 2 soru, ama her ikisinde de ciddi hata. Az örnekle SFT verisi yetersiz kalmış olabilir.
+
+14.4 Soru Tipi Bazlı Zayıflıklar
+
+Factual sorular (F1 %26.4): Spesifik sayısal bilgi veya koşul gerektiren sorularda model yetersiz. 3B parametrelik model bu düzeyde kesinlik için sınırlı.
+
+Procedural sorular (F1 %33.8): Usul adımlarını sıralama gerektiren sorularda eksik adımlar. Ancak faithfulness %97.6 ile iyi — model context'e sadık ama eksik.
+
+14.5 Citation Recall Düşüşü
+
+SFT sonrası citation recall %80.6'dan %62.4'e düştü. Ancak citation precision %39.5'ten %58.1'e ve citation exact %9.7'den %45.2'ye yükseldi. Model daha az ama daha doğru citation üretmeyi öğrendi. Bu trade-off kabul edilebilir çünkü precision ve exact match artışı recall kaybından daha değerlidir.
+
+14.6 Sistemin En Zayıf Halkası
+
+Generation kalitesi en zayıf halkadır. Retrieval tarafı Recall@5 ~%79 ile iyi performans göstermektedir. Ancak 3B parametrelik model, özellikle karmaşık hukuki sorularda (çok maddeli, nitelikli hal, koşullu ceza) yeterli cevap üretememektedir. Daha büyük bir model (7B+) veya API tabanlı inference bu sorunu hafifletebilir.
+
+---
+
+15. Faz 3: Yapılmayanlar ve Savunma
+
+Aşağıdaki çalışmalar Faz 3 kapsamında planlanmış ancak yapılamamıştır:
+
+✗ Embedding fine-tuning / contrastive tuning / hard negative mining — 8GB VRAM sınırlarında model selection (e5-base → e5-large) önceliklendirildi ve MRR'da +14.9% iyileşme sağlandı. Fine-tuning yerine model büyütme stratejisi benimsenmiştir.
+
+✗ Reranker fine-tuning — bge-reranker-v2-m3 zero-shot performansı yeterli görüldü. Reranker fine-tuning için query-positive-negative üçlülerinden oluşan eğitim verisi üretilmesi ve çapraz doğrulama gerektiğinden ertelenmiştir.
+
+✗ BLEU / ROUGE metrikleri — Hukuk metinlerinde n-gram overlap metrikleri yanıltıcı olabilir. Token-level F1, citation accuracy ve faithfulness daha anlamlı metrikler olarak tercih edilmiştir. Ancak karşılaştırma amacıyla ileride eklenebilir.
+
+✗ TBMM / Yargıtay verisi — Mevcut 175 soruluk benchmark tamamen 7 mevzuat metniyle cevaplanabilir durumdadır. İçtihat ve Meclis tutanakları farklı bir ingest pipeline ve daha geniş bir benchmark gerektirir. Scope dışı bırakılmıştır.
+
+Savunma: 8GB yerel VRAM kısıtları dahilinde model selection + reranker + QLoRA hattı stratejik olarak önceliklendirilmiştir. Bu strateji ile answer_f1'de +14.6%, citation exact'ta +35.5% ve faithfulness'ta +15.9% iyileşme sağlanmıştır. Bu kazanımlar, fine-tuning yerine model seçimi ve prompt/SFT optimizasyonu ile elde edilmiştir.
+
+---
+
+16. Future Work
+
+- **Reranker fine-tuning**: bge-reranker-v2-m3 Türkçe hukuk verisine özel fine-tune edilebilir (query-positive-negative üçlüleri ile)
+- **Embedding fine-tuning**: Contrastive learning ile domain-specific embedding eğitimi (daha güçlü GPU gerekli)
+- **Hard negative mining**: Retrieval hatalarından hard negative örnekleri çıkarılarak hem embedding hem reranker iyileştirilebilir
+- **BLEU / ROUGE**: Karşılaştırma amacıyla eklenebilir
+- **TBMM / Yargıtay genişletme**: İçtihat ve Meclis tutanakları corpus'a eklenebilir, benchmark genişletilebilir
+- **Daha büyük LLM denemesi**: Qwen2.5-7B veya daha büyük modeller API tabanlı inference ile denenebilir
+- **Daha güçlü faithfulness değerlendirme**: NLI tabanlı veya LLM-as-judge yöntemi ile daha güvenilir faithfulness ölçümü
+- **Çapraz doğrulama**: k-fold cross-validation ile daha güvenilir metrik tahminleri
+
+---
+
+17. Donanım ve Ortam
+
+- GPU: NVIDIA GeForce RTX 3070 Laptop GPU (8GB VRAM)
+- PyTorch: 2.7.0+cu124
+- CUDA: 12.4
+- Python: 3.11
+- Temel kütüphaneler: transformers, peft, trl 1.4, bitsandbytes, faiss-cpu, sentence-transformers
+- QLoRA eğitim süresi: ~22 dakika (3 epoch, 42 step)
+- Inference latency: baseline ~17s/soru, SFT-QLoRA ~21s/soru
