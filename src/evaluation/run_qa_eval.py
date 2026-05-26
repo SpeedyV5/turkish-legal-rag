@@ -2,7 +2,7 @@
 
 Pipeline:
 1. Load benchmark split (default: dev).
-2. Build retriever (default: e5large_reranked_ml).
+2. Build retriever (default: e5large_reranked_bge).
 3. For each question: retrieve top_k contexts.
 4. Free retriever memory (optional), then load LLM.
 5. For each question: build prompt, generate answer.
@@ -14,18 +14,22 @@ pass, then LLM is loaded (4-bit quantized) and generation done in a
 second pass.
 
 Usage examples:
-  python -m src.evaluation.run_qa_eval --split dev --system e5large_reranked_ml
+  python -m src.evaluation.run_qa_eval --split dev --system e5large_reranked_bge
   python -m src.evaluation.run_qa_eval --split dev --max-questions 10
   python -m src.evaluation.run_qa_eval --split test --output-tag final
+  python -m src.evaluation.run_qa_eval --benchmark path/to/custom_benchmark.jsonl --output-tag custom
 """
 from __future__ import annotations
 
 import argparse
 import gc
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
+
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 from src.evaluation.qa_metrics import (
     aggregate_qa_metrics,
@@ -33,6 +37,7 @@ from src.evaluation.qa_metrics import (
     exact_match,
     extract_cited_articles,
     faithfulness_lexical,
+    overlap_generation_metrics,
     token_f1,
 )
 from src.evaluation.run_retrieval_eval import create_retriever, load_benchmark
@@ -85,7 +90,7 @@ def stage2_generate(
 ) -> list[dict[str, Any]]:
     """Load LLM and generate answers for every question."""
     from src.generation.generator import LocalGenerator
-    from src.generation.prompt_builder import build_user_prompt
+    from src.generation.prompt_builder import build_user_prompt, ensure_dayanak
 
     print(f"[INFO] Stage 2: loading LLM from {config_path}")
     if lora_adapter_path:
@@ -101,6 +106,7 @@ def stage2_generate(
         t0 = time.time()
         try:
             answer = gen.generate(prompt)
+            answer = ensure_dayanak(answer, contexts[:5])
         except Exception as e:
             answer = f"[GENERATION_ERROR] {e}"
         gen_seconds = time.time() - t0
@@ -150,11 +156,13 @@ def compute_metrics_for_rows(rows: list[dict[str, Any]]) -> tuple[list[dict], di
         cite = extract_cited_articles(ans)
         cite_metrics = citation_metrics(cite["articles"], r["gold_articles"])
         faith = faithfulness_lexical(ans, contexts)
+        overlap = overlap_generation_metrics(ans, ref)
 
         m: dict[str, float] = {"em": em}
         m.update({f"answer_{k}": v for k, v in f1.items()})
         m.update(cite_metrics)
         m.update(faith)
+        m.update(overlap)
         m["has_dayanak"] = 1.0 if cite["has_dayanak"] else 0.0
 
         record = dict(r)
@@ -201,6 +209,10 @@ def main() -> None:
         "--split", default="dev", choices=list(SPLIT_FILES.keys()),
     )
     parser.add_argument(
+        "--benchmark", default=None,
+        help="Optional JSONL benchmark path. Overrides --split when provided.",
+    )
+    parser.add_argument(
         "--retrieval-config", default="configs/retrieval_config_e5large.yaml",
     )
     parser.add_argument(
@@ -216,8 +228,9 @@ def main() -> None:
                         help="Suffix for the output filename.")
     args = parser.parse_args()
 
-    benchmark_path = SPLIT_FILES[args.split]
-    print(f"[INFO] Split: {args.split} ({benchmark_path})")
+    benchmark_path = args.benchmark if args.benchmark else SPLIT_FILES[args.split]
+    split_name = "custom" if args.benchmark else args.split
+    print(f"[INFO] Split: {split_name} ({benchmark_path})")
     benchmark = load_benchmark(benchmark_path)
     if args.max_questions > 0:
         benchmark = benchmark[: args.max_questions]
@@ -238,12 +251,13 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_{args.output_tag}" if args.output_tag else ""
-    out_path = output_dir / f"qa_eval_{args.split}_{args.system}{suffix}.json"
+    out_path = output_dir / f"qa_eval_{split_name}_{args.system}{suffix}.json"
 
     payload = {
         "config": {
             "system": args.system,
-            "split": args.split,
+            "split": split_name,
+            "benchmark_path": benchmark_path,
             "retrieval_config": args.retrieval_config,
             "generation_config": args.generation_config,
             "top_k": args.top_k,
@@ -257,11 +271,12 @@ def main() -> None:
 
     # Pretty print
     print("\n" + "=" * 60)
-    print(f"QA RESULTS: {args.system} | split={args.split} | n={len(benchmark)}")
+    print(f"QA RESULTS: {args.system} | split={split_name} | n={len(benchmark)}")
     print("=" * 60)
     agg = summary["aggregated"]
     keys_priority = [
         "em", "answer_f1", "answer_precision", "answer_recall",
+        "bleu1", "bleu2", "rouge_l_f1",
         "citation_f1", "citation_precision", "citation_recall", "citation_exact",
         "has_dayanak", "faithfulness_lexical",
     ]

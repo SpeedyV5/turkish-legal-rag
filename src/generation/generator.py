@@ -31,6 +31,7 @@ class LocalGenerator:
         self.top_p = float(self.cfg["generation"]["top_p"])
         self.do_sample = bool(self.cfg["generation"]["do_sample"])
         self.repetition_penalty = float(self.cfg["generation"]["repetition_penalty"])
+        self.no_repeat_ngram_size = int(self.cfg["generation"].get("no_repeat_ngram_size", 0))
 
         self.system_prompt = self.cfg["prompting"]["system_prompt"]
 
@@ -68,7 +69,7 @@ class LocalGenerator:
             self.model = PeftModel.from_pretrained(self.model, lora_adapter_path)
             self.model.eval()
 
-    def generate(self, user_prompt: str) -> str:
+    def generate(self, user_prompt: str, max_new_tokens: int | None = None) -> str:
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_prompt},
@@ -91,13 +92,15 @@ class LocalGenerator:
 
         with torch.no_grad():
             generate_kwargs = {
-                "max_new_tokens": self.max_new_tokens,
+                "max_new_tokens": max_new_tokens if max_new_tokens is not None else self.max_new_tokens,
                 "do_sample": self.do_sample,
                 "repetition_penalty": self.repetition_penalty,
                 "pad_token_id": self.tokenizer.pad_token_id,
                 "eos_token_id": self.tokenizer.eos_token_id,
                 "use_cache": True,
             }
+            if self.no_repeat_ngram_size > 0:
+                generate_kwargs["no_repeat_ngram_size"] = self.no_repeat_ngram_size
 
             if self.do_sample:
                 generate_kwargs["temperature"] = self.temperature

@@ -16,3 +16,5 @@ accelerate
 bitsandbytes
 sentencepiece
 rank-bm25
+peft
+trl

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import math
+from collections import Counter
 from typing import Any
 
 
@@ -53,7 +55,6 @@ def token_f1(prediction: str, reference: str) -> dict[str, float]:
         return {"f1": 0.0, "precision": 0.0, "recall": 0.0}
 
     # Multiset intersection (so repeated tokens are counted properly)
-    from collections import Counter
     pred_counts = Counter(pred_toks)
     ref_counts = Counter(ref_toks)
     common = pred_counts & ref_counts
@@ -66,6 +67,95 @@ def token_f1(prediction: str, reference: str) -> dict[str, float]:
     recall = n_common / len(ref_toks)
     f1 = 2 * precision * recall / (precision + recall)
     return {"f1": f1, "precision": precision, "recall": recall}
+
+
+# ------------------------ Supplemental overlap metrics ------------------- #
+
+def strip_dayanak_block(answer: str) -> str:
+    """Remove the citation block so answer-quality metrics evaluate content."""
+    m = _DAYANAK_RE.search(answer)
+    if not m:
+        return answer.strip()
+    return (answer[:m.start()] + " " + answer[m.end():]).strip()
+
+
+def _ngrams(tokens: list[str], n: int) -> list[tuple[str, ...]]:
+    if n <= 0 or len(tokens) < n:
+        return []
+    return [tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
+
+
+def _clipped_ngram_precision(pred_tokens: list[str], ref_tokens: list[str], n: int) -> float:
+    pred_ngrams = Counter(_ngrams(pred_tokens, n))
+    ref_ngrams = Counter(_ngrams(ref_tokens, n))
+    if not pred_ngrams:
+        return 0.0
+    overlap = sum((pred_ngrams & ref_ngrams).values())
+    return overlap / sum(pred_ngrams.values())
+
+
+def _brevity_penalty(pred_len: int, ref_len: int) -> float:
+    if pred_len == 0:
+        return 0.0
+    if pred_len > ref_len:
+        return 1.0
+    return math.exp(1 - ref_len / pred_len)
+
+
+def _lcs_len(a: list[str], b: list[str]) -> int:
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    for tok_a in a:
+        cur = [0] * (len(b) + 1)
+        for j, tok_b in enumerate(b, start=1):
+            if tok_a == tok_b:
+                cur[j] = prev[j - 1] + 1
+            else:
+                cur[j] = max(prev[j], cur[j - 1])
+        prev = cur
+    return prev[-1]
+
+
+def overlap_generation_metrics(prediction: str, reference: str) -> dict[str, float]:
+    """Dependency-free BLEU/ROUGE-style metrics for supplementary reporting.
+
+    These are not used as primary legal QA metrics; they provide a familiar
+    n-gram/sequence-overlap signal alongside answer F1, citation accuracy, and
+    lexical faithfulness.
+    """
+    pred_tokens = tokenize(strip_dayanak_block(prediction))
+    ref_tokens = tokenize(reference)
+    if not pred_tokens or not ref_tokens:
+        return {
+            "bleu1": 0.0,
+            "bleu2": 0.0,
+            "rouge_l_precision": 0.0,
+            "rouge_l_recall": 0.0,
+            "rouge_l_f1": 0.0,
+        }
+
+    bp = _brevity_penalty(len(pred_tokens), len(ref_tokens))
+    p1 = _clipped_ngram_precision(pred_tokens, ref_tokens, 1)
+    p2 = _clipped_ngram_precision(pred_tokens, ref_tokens, 2)
+    bleu1 = bp * p1
+    bleu2 = bp * math.sqrt(p1 * p2) if p1 > 0 and p2 > 0 else 0.0
+
+    lcs = _lcs_len(pred_tokens, ref_tokens)
+    rouge_p = lcs / len(pred_tokens)
+    rouge_r = lcs / len(ref_tokens)
+    rouge_f1 = (
+        2 * rouge_p * rouge_r / (rouge_p + rouge_r)
+        if (rouge_p + rouge_r) > 0
+        else 0.0
+    )
+    return {
+        "bleu1": bleu1,
+        "bleu2": bleu2,
+        "rouge_l_precision": rouge_p,
+        "rouge_l_recall": rouge_r,
+        "rouge_l_f1": rouge_f1,
+    }
 
 
 # --------------------------- Citation parser ---------------------------- #
@@ -212,7 +302,7 @@ def faithfulness_lexical(
         supported = sum(1 for t in ans_tokens if t in ctx_tokens_set)
     else:
         # bigram support is stricter; we keep unigram default
-        ctx_concat = " ".join(tokenize(c) for c in contexts)
+        ctx_concat = " ".join(" ".join(tokenize(c)) for c in contexts)
         supported = sum(1 for i in range(len(ans_tokens) - n_gram + 1)
                         if " ".join(ans_tokens[i:i + n_gram]) in ctx_concat)
 

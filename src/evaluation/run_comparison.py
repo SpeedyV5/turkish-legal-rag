@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 EVAL_DIR = Path("outputs/evaluation")
@@ -11,7 +15,7 @@ SYSTEM_ORDER = [
     "baseline_dense", "bm25_only", "hybrid",
     "dense_reranked", "hybrid_reranked",
     "dense_reranked_ml", "hybrid_reranked_ml",
-    "e5large_dense", "e5large_reranked_ml",
+    "e5large_dense", "e5large_reranked_ml", "e5large_reranked_bge",
 ]
 
 KEY_METRICS = ["mrr", "recall@1", "recall@3", "recall@5", "recall@10", "ndcg@5", "ndcg@10", "hit@5"]

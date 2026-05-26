@@ -72,7 +72,8 @@ turkish-legal-rag/
 │   ├── train_sft_qlora.py             # QLoRA eğitim scripti [Faz 3]
 │   ├── merge_lora.py                  # LoRA adapter → full model merge [Faz 3]
 │   ├── compare_baseline_vs_sft.py     # Baseline vs SFT karşılaştırma [Faz 3]
-│   └── final_analysis.py              # Final rapor üretici [Faz 3]
+│   ├── prepare_custom_pdfs.py         # Custom PDF koleksiyonu hazırlama [Faz 4]
+│   └── final_analysis.py              # Final analiz raporu üretici [Faz 4]
 ├── data/
 │   ├── raw/mevzuat/pdfs/              # 7 kanun PDF'i
 │   ├── processed/corpus/              # Registry, chunks, embeddings, FAISS index
@@ -82,9 +83,11 @@ turkish-legal-rag/
 │   ├── evaluation/                    # 9 retrieval sistemi sonuçları [Faz 2]
 │   ├── qa_eval/                       # QA evaluation sonuçları [Faz 3]
 │   ├── sft_qlora/                     # QLoRA checkpoint ve final adapter [Faz 3]
-│   └── final_report.md               # Otomatik üretilen sonuç raporu [Faz 3]
+│   └── final_report.md               # Otomatik üretilen sonuç raporu [Faz 4]
 ├── requirements.txt
 ├── README.md
+├── DEMO_GUIDE.md
+├── SUBMISSION_CHECKLIST.md
 └── REPORT.md
 ```
 
@@ -113,9 +116,16 @@ QLoRA fine-tuned model ile çalıştırmak için:
 python -m src.pipeline.rag_pipeline --lora-adapter outputs/sft_qlora/final
 ```
 
+Canlı sunumda daha kısa ve güvenli cevaplar için demo-safe mod:
+```bash
+python -m src.pipeline.rag_pipeline --lora-adapter outputs/sft_qlora/final --demo-safe
+```
+
+`--demo-safe` yalnızca canlı demo davranışını değiştirir: cevapları en fazla birkaç cümleyle sınırlar ve `Dayanak` satırını retrieved kaynaklardan ekler. Benchmark/evaluation sonuçları normal QA evaluation hattına aittir.
+
 ### Retrieval Evaluation (Faz 2)
 
-9 retrieval sisteminin tamamı:
+10 retrieval sisteminin tamamı:
 ```bash
 python -m src.evaluation.run_retrieval_eval --system baseline_dense
 python -m src.evaluation.run_retrieval_eval --system bm25_only
@@ -126,6 +136,7 @@ python -m src.evaluation.run_retrieval_eval --system dense_reranked_ml
 python -m src.evaluation.run_retrieval_eval --system hybrid_reranked_ml
 python -m src.evaluation.run_retrieval_eval --system e5large_dense --config configs/retrieval_config_e5large.yaml
 python -m src.evaluation.run_retrieval_eval --system e5large_reranked_ml --config configs/retrieval_config_e5large.yaml
+python -m src.evaluation.run_retrieval_eval --system e5large_reranked_bge --config configs/retrieval_config_e5large.yaml
 ```
 
 ### QA Evaluation (Faz 3)
@@ -138,6 +149,11 @@ python -m src.evaluation.run_qa_eval --split dev --system e5large_reranked_bge
 SFT-QLoRA model ile test set:
 ```bash
 python -m src.evaluation.run_qa_eval --split test --system e5large_reranked_bge --lora-adapter outputs/sft_qlora/final --output-tag sft_qlora
+```
+
+Hoca aynı formatta özel benchmark JSONL verirse:
+```bash
+python -m src.evaluation.run_qa_eval --benchmark path/to/custom_benchmark.jsonl --system e5large_reranked_bge --lora-adapter outputs/sft_qlora/final --output-tag custom
 ```
 
 ### SFT / QLoRA Eğitimi (Faz 3)
@@ -166,18 +182,47 @@ python scripts/suggest_list_gold_expansion.py
 python scripts/apply_list_gold_expansion.py
 ```
 
+### Custom PDF Koleksiyonu ile Çalıştırma
+
+Değerlendirici farklı PDF dokümanları verirse aynı RAG pipeline bu koleksiyon üzerinde yeniden indexlenebilir:
+
+```bash
+python scripts/prepare_custom_pdfs.py --input-dir path/to/custom_pdfs --reset
+python -m src.corpus.build_registry
+python -m src.corpus.register_pdfs
+python -m src.retrieval.chunking
+python -m src.retrieval.embedder --config configs/retrieval_config_e5large.yaml
+python -m src.retrieval.vector_store --config configs/retrieval_config_e5large.yaml
+python -m src.pipeline.rag_pipeline --lora-adapter outputs/sft_qlora/final --demo-safe
+```
+
+Not: Bu işlem `data/raw/mevzuat/seed_urls.csv`, `data/raw/mevzuat/pdfs/` ve `data/processed/corpus/` altındaki lokal corpus artifact'lerini custom koleksiyona göre yeniden üretir.
+
 ## Mevcut Durum
 
 - **Faz 1** (İbo): ✅ Tamamlandı — Baseline RAG pipeline
 - **Faz 2** (Deniz): ✅ Tamamlandı — Benchmark, evaluation altyapısı, 9 retrieval sistemi
-- **Faz 3** (İbo): ✅ Büyük ölçüde tamamlandı — QA eval, prompt tuning, QLoRA SFT, ablation
-- **Faz 4** (Deniz): 🔜 Devam ediyor — Hata analizi, rapor detaylandırma, sunum
+- **Faz 3** (İbo): ✅ Tamamlandı — QA eval, prompt tuning, QLoRA SFT, ablation
+- **Faz 4** (Deniz): ✅ Tamamlandı — Final analiz, ek overlap metrikleri, rapor ve demo hazırlığı
+
+Teslim için ana dokümanlar:
+
+- `README.md`: Türkçe kullanım ve proje özeti
+- `REPORT.md`: İngilizce final proje raporu
+- `DEMO_GUIDE.md`: İngilizce kısa demo ve sunum rehberi
+- `SUBMISSION_CHECKLIST.md`: Teslimde yüklenecek link/dosya listesi
 
 ## En İyi Sistem: Neden Bu Seçildi?
 
-Pipeline varsayılanı: **e5-large + bge-reranker-v2-m3 + QLoRA-tuned Qwen2.5-3B-Instruct**
+Final deployment tercihi: **e5-large + bge-reranker-v2-m3 + QLoRA-tuned Qwen2.5-3B-Instruct**
 
-Retrieval tarafında 9 sistem karşılaştırıldı. Seçim gerekçesi:
+Not: `python -m src.pipeline.rag_pipeline` varsayılan olarak en iyi retrieval stack'i (e5-large + BGE) ve untuned Qwen modelini açar. Final SFT-QLoRA sistemi için LoRA adapter açıkça verilmelidir:
+
+```bash
+python -m src.pipeline.rag_pipeline --lora-adapter outputs/sft_qlora/final
+```
+
+Retrieval tarafında Faz 2'deki 9 sistem ve Faz 3'te eklenen BGE reranker dahil toplam 10 sistem karşılaştırıldı. Seçim gerekçesi:
 
 | Kriter | En iyi sistem | Değer |
 |--------|---------------|-------|
@@ -226,10 +271,48 @@ Aşağıdaki çalışmalar 8GB yerel VRAM kısıtı ve proje takvimi nedeniyle y
 
 - **Embedding fine-tuning** / contrastive tuning / hard negative mining — VRAM yetersiz; bunun yerine model seçimi (e5-base → e5-large) ile büyük iyileşme sağlandı
 - **Reranker fine-tuning** — bge-reranker-v2-m3 zero-shot zaten iyi performans verdi; ertelendi
-- **BLEU / ROUGE metrikleri** — Hukuk metinlerinde token-level F1 daha anlamlı, ama eklenebilir
+- **Klasik BLEU / ROUGE ana metrikleri** — Hukuk metinlerinde token-level F1, citation accuracy ve faithfulness daha anlamlıdır; Faz 4'te BLEU-1/2 ve ROUGE-L benzeri overlap metrikleri yalnızca destekleyici sinyal olarak eklenmiştir
 - **TBMM / Yargıtay verisi** — Mevcut benchmark yalnızca 7 mevzuat ile uyumlu; future work
 
 Buna karşılık, 8GB VRAM sınırlarında model selection + reranker + QLoRA hattı önceliklendirilmiş ve answer_f1'de +14.6%, faithfulness'ta +15.9% iyileşme sağlanmıştır.
+
+## Faz 4 Final Analiz
+
+Faz 4'te yeni büyük eğitim kapsamı açılmadan teslim paketi tamamlandı:
+
+- Phase 3 artifact'leri doğrulandı: `outputs/qa_eval/`, `outputs/sft_qlora/final/`, `outputs/final_report.md`, `outputs/evaluation/eval_e5large_reranked_bge.json`
+- `outputs/evaluation/comparison_report.json` BGE reranker satırını içerecek şekilde yeniden üretildi
+- QA evaluation hattına dependency-free `BLEU-1`, `BLEU-2` ve `ROUGE-L F1` overlap metrikleri eklendi
+- `scripts/final_analysis.py` hata analizi, citation mismatch, low-faithfulness vakaları ve en çok iyileşen soruları raporlar hale getirildi
+
+Faz 4 destekleyici overlap sonuçları (test split):
+
+| Metrik | Baseline | SFT-QLoRA | Delta |
+|--------|----------|-----------|-------|
+| BLEU-1 | 0.2387 | **0.3460** | +10.7% |
+| BLEU-2 | 0.1869 | **0.3063** | +11.9% |
+| ROUGE-L F1 | 0.2718 | **0.4083** | +13.7% |
+
+Bu metrikler final iddianın ana dayanağı değildir; answer F1, citation exact ve lexical faithfulness ana değerlendirme metrikleri olarak korunmuştur.
+
+## Demo
+
+Final sistem komutu:
+
+```bash
+python -m src.pipeline.rag_pipeline --lora-adapter outputs/sft_qlora/final --demo-safe
+```
+
+Önerilen demo soruları:
+
+| Amaç | Soru |
+|------|------|
+| Güçlü kısa cevap | Türkiye Devletinin yönetim şekli nedir? |
+| Liste + citation | Temel hak ve hürriyetlerin sınırlanması hangi şartlara bağlıdır? |
+| Usul hukuku | Müdafiin görevlendirilmesi hangi hallerde zorunludur? |
+| Sınırlılık örneği | Yağma suçunun cezası nedir? |
+
+Sunum akışı: problem tanımı, baseline RAG, retrieval optimizasyonları, BGE reranking, QLoRA SFT, ablation sonuçları, hata analizi, demo, sınırlılıklar ve future work.
 
 ## Benchmark Dosyaları
 
@@ -246,15 +329,16 @@ Buna karşılık, 8GB VRAM sınırlarında model selection + reranker + QLoRA ha
 
 | Klasör | İçerik |
 |--------|--------|
-| `outputs/evaluation/` | 10 retrieval sisteminin eval JSON dosyaları + comparison_report.json |
+| `outputs/evaluation/` | 10 retrieval sisteminin eval JSON dosyaları + BGE dahil comparison_report.json |
 | `outputs/qa_eval/` | Dev ve test split QA eval sonuçları (baseline + SFT + ablation varyantları) |
 | `outputs/sft_qlora/final/` | Eğitilmiş QLoRA LoRA adapter (~60MB) |
 | `outputs/final_report.md` | Otomatik üretilen Markdown sonuç raporu |
 
-## Donanım
+## Donanım ve Ortam
 
-- GPU: NVIDIA GeForce RTX 3070 Laptop GPU (8GB VRAM)
+- Faz 2 GPU: NVIDIA GeForce RTX 3050 Laptop GPU (4GB VRAM)
+- Faz 3/4 GPU: NVIDIA GeForce RTX 3070 Laptop GPU (8GB VRAM)
 - PyTorch: 2.7.0+cu124
 - CUDA: 12.4
 - QLoRA eğitim süresi: ~22 dakika (3 epoch, 42 step)
-- Inference latency: baseline ~17s/soru, SFT-QLoRA ~21s/soru
+- Inference latency: baseline ~17s/soru, SFT-QLoRA ~21s/soru; full smoke-test uçtan uca örneklerde yaklaşık 26-31s aralığı gözlenmiştir

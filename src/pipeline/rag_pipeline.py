@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import os
+
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 from src.generation.generator import LocalGenerator
-from src.generation.prompt_builder import build_user_prompt
+from src.generation.prompt_builder import (
+    build_demo_safe_prompt,
+    build_user_prompt,
+    ensure_dayanak,
+    postprocess_demo_safe_answer,
+    prioritize_demo_results,
+)
 
 
 def build_retriever(system: str = "e5large_reranked_bge"):
@@ -60,16 +69,29 @@ def build_retriever(system: str = "e5large_reranked_bge"):
 
 
 class TurkishLegalRAGPipeline:
-    def __init__(self, system: str = "e5large_reranked_bge", lora_adapter: str | None = None) -> None:
+    def __init__(
+        self,
+        system: str = "e5large_reranked_bge",
+        lora_adapter: str | None = None,
+        demo_safe: bool = False,
+    ) -> None:
         print(f"[INFO] Retrieval system: {system}")
+        self.demo_safe = demo_safe
         self.retriever = build_retriever(system)
         print("[INFO] Loading LLM generator...")
         self.generator = LocalGenerator(lora_adapter_path=lora_adapter)
 
     def answer(self, question: str, top_k: int = 5) -> dict:
         retrieved = self.retriever.search(question, top_k=top_k)
-        prompt = build_user_prompt(question, retrieved)
-        answer = self.generator.generate(prompt)
+        if self.demo_safe:
+            demo_retrieved = prioritize_demo_results(question, retrieved)
+            prompt = build_demo_safe_prompt(question, demo_retrieved)
+            answer = self.generator.generate(prompt, max_new_tokens=120)
+            answer = postprocess_demo_safe_answer(answer, demo_retrieved)
+        else:
+            prompt = build_user_prompt(question, retrieved)
+            answer = self.generator.generate(prompt)
+            answer = ensure_dayanak(answer, retrieved)
 
         return {
             "question": question,
@@ -87,15 +109,23 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--lora-adapter", default=None,
                         help="Path to LoRA adapter for fine-tuned model.")
+    parser.add_argument("--demo-safe", action="store_true",
+                        help="Use short, conservative answers for live demos.")
     parser.add_argument("--question", default=None,
                         help="Single question for non-interactive mode.")
     args = parser.parse_args()
 
-    pipeline = TurkishLegalRAGPipeline(system=args.system, lora_adapter=args.lora_adapter)
+    pipeline = TurkishLegalRAGPipeline(
+        system=args.system,
+        lora_adapter=args.lora_adapter,
+        demo_safe=args.demo_safe,
+    )
 
     print("\n" + "=" * 60)
     print("Turkish Legal RAG - Interactive QA")
     print(f"Retrieval: {args.system} | Top-K: {args.top_k}")
+    if args.demo_safe:
+        print("Mode: demo-safe short answers")
     print("=" * 60)
 
     def print_result(result):
