@@ -16,6 +16,19 @@ If the LoRA adapter is unavailable, run retrieval + untuned generation:
 python -m src.pipeline.rag_pipeline --system e5large_reranked_bge
 ```
 
+## Custom PDF Support (Post-Presentation Testing)
+
+The evaluator requirement is: test with custom documents **after** the presentation, not during it. The project supports this via CLI commands documented in [CUSTOM_PDF_GUIDE.md](CUSTOM_PDF_GUIDE.md).
+
+### What to say during the presentation
+
+> "Our system supports post-presentation testing with custom PDFs. The evaluator places PDFs in a folder and runs the documented commands to rebuild the local index and query the same RAG pipeline. This is not a web upload UI; it reuses the existing corpus build scripts. Original benchmark files are not deleted, and the original 7-law corpus can be restored from the submitted data package."
+
+### What NOT to do live
+
+- Do not run custom PDF ingestion or index rebuild during the demo (embedding/FAISS rebuild can take several minutes).
+- Do not run `prepare_custom_pdfs.py --reset` before the live demo; it replaces the active corpus.
+
 ## Custom Document Demo
 
 If the evaluator provides a folder of PDFs, rebuild the local corpus:
@@ -29,6 +42,8 @@ python -m src.retrieval.embedder --config configs/retrieval_config_e5large.yaml
 python -m src.retrieval.vector_store --config configs/retrieval_config_e5large.yaml
 python -m src.pipeline.rag_pipeline --lora-adapter outputs/sft_qlora/final --demo-safe
 ```
+
+Restore the original 7-law corpus after custom testing by extracting `data/raw/` and `data/processed/` from `CENG493_Turkish_Legal_RAG_data.zip` back into the project root.
 
 ## Custom Benchmark Evaluation
 

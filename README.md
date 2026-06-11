@@ -184,6 +184,8 @@ python scripts/apply_list_gold_expansion.py
 
 ### Custom PDF Koleksiyonu ile Çalıştırma
 
+Sunumdan sonra değerlendiricinin kendi PDF'leriyle test edebilmesi için ayrıntılı Türkçe rehber: [CUSTOM_PDF_GUIDE.md](CUSTOM_PDF_GUIDE.md)
+
 Değerlendirici farklı PDF dokümanları verirse aynı RAG pipeline bu koleksiyon üzerinde yeniden indexlenebilir:
 
 ```bash
@@ -197,6 +199,8 @@ python -m src.pipeline.rag_pipeline --lora-adapter outputs/sft_qlora/final --dem
 ```
 
 Not: Bu işlem `data/raw/mevzuat/seed_urls.csv`, `data/raw/mevzuat/pdfs/` ve `data/processed/corpus/` altındaki lokal corpus artifact'lerini custom koleksiyona göre yeniden üretir.
+
+Orijinal 7 kanun korpusuna geri dönmek için `CENG493_Turkish_Legal_RAG_data.zip` içindeki `data/raw/` ve `data/processed/` klasörlerini proje köküne geri kopyalayın.
 
 ## Mevcut Durum
 
